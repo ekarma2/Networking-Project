@@ -5,7 +5,7 @@
 #include <netdb.h>
 #include <sys/socket.h>
 
-#include "daytime_client.h"
+#include "client.h"
 
 /*Resolves server_address/server_port and opens a TCP connection to it. 
  */
