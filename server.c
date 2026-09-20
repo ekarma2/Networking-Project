@@ -60,20 +60,41 @@ int main(int argc, char** argv)
     // ----------------------------------------------------------
     while (TRUE)
     {
+        //get a new client connection
+        int *client_socket = malloc(sizeof(int));
         
-        // accept connection to client
-        int client_socket = accept(server_socket, NULL, NULL);
+        // check if malloc failed
+        if (client_socket == NULL)
+        {
+            perror("Error allocating client socket");
+            continue;
+        }
+
+        //accept a new client connection
+        *client_socket = accept(server_socket, NULL, NULL);
+
+        // check if accept failed
+        if (*client_socket == -1)
+        {
+            perror("Error accepting connection");
+            free(client_socket);
+            continue;
+        }
+
+        // log the accepted client connection
         printf("\nServer with PID %d: accepted client\n", getpid());
 
-        // create thread to handle the client's request
-        // note that this is a naive approach, i.e. there are race conditions
-        // for now this is okay, assuming low load
-        //do we fix? : luke
+        // no more race conditions!
+        // each thread receives its own allocated socket descriptor
+        // to prevent the accept loop from overwriting the value.
         pthread_t thread;
-        if (pthread_create(&thread, NULL, handle_client, (void*)&client_socket) != 0)
+        
+        if (pthread_create(&thread, NULL, handle_client, client_socket) != 0)
         {
             perror("Error creating thread");
-            exit(EXIT_FAILURE);
+            close(*client_socket);
+            free(client_socket);
+            continue;
         }
         
         // detach the thread so that we don't have to wait (join) with it to reclaim memory.
@@ -91,49 +112,57 @@ int main(int argc, char** argv)
 /* handle client                                                             */
 /* ************************************************************************* */
 
-void* handle_client(void* arg) 
+void* handle_client(void* arg)
 {
-    int client_socket = *((int*)arg);   // the socket connected to the client
-    char input;
-    int keep_going = TRUE;
-    
-    while (keep_going) 
-    {
-        // read char from client
-        switch (read(client_socket, &input, sizeof(char))) 
-        {
-            case 0:
-                keep_going = FALSE;
-                perror("End of stream, returning ...\n");
-                break;
-            case -1:
-                perror("Error reading from network!\n");
-                keep_going = FALSE;
-                break;
-        }
-        printf("%c", input);
-        
-        // check if we terminate
-        if (input == 'q') 
-        {
-            keep_going = FALSE;
-        }
-        
-        // send result back to client
-        write(client_socket, &input, sizeof(char));
-    }
-    
-    // cleanup
-    if (close(client_socket) == -1) 
-    {
-        perror("Error closing socket");
-        exit(EXIT_FAILURE);
-    } 
-    else
-    {
-        printf("Closed socket to client, exit");
-    }
-    
-    pthread_exit(NULL);
-}
+    int client_socket = *((int*)arg);
+    // free the allocated memory for the client socket descriptor
+    free(arg); 
 
+    time_t current_time;
+    struct tm utc_time;
+    char time_message[80];
+
+    // get current time
+    current_time = time(NULL);
+
+    // error handling for wrong time
+    if (current_time == (time_t)-1)
+    {
+        perror("Error getting current time");
+        close(client_socket);
+        return NULL;
+    }
+
+    // convert to UTC in a thread-safe way
+    // gmtime_r instead of gmtime, gmtime is not thread-safe
+    if (gmtime_r(&current_time, &utc_time) == NULL)
+    {
+        perror("Error converting time");
+        close(client_socket);
+        return NULL;
+    }
+
+    // make the time message, ends in *
+    strftime(
+        time_message,
+        sizeof(time_message),
+        "%Y-%m-%d %H:%M:%S UTC *",
+        &utc_time
+    );
+
+    // send the time message to the client
+    if (write(client_socket, time_message, strlen(time_message)) == -1)
+    {
+        perror("Error writing to client");
+    }
+
+    printf("Sent: %s\n", time_message);
+
+    // close connection after sending the time
+    if (close(client_socket) == -1)
+    {
+        perror("Error closing client socket");
+    }
+
+    return NULL;
+}
