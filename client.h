@@ -2,7 +2,7 @@
 #define DAYTIME_CLIENT_H
 
 // Server information for the NIST Daytime service
-#define SERVER_ADDRESS   "time-a.nist.gov"
+#define SERVER_ADDRESS   "time.nist.gov:13"
 #define SERVER_PORT      "13"
 
 
