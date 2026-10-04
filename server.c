@@ -1,5 +1,7 @@
 #include "server.h"
 
+sem_t socket_copied;
+
 
 /* ************************************************************************* */
 /* MAIN                                                                      */
@@ -58,47 +60,50 @@ int main(int argc, char** argv)
     // ----------------------------------------------------------
     // server loop
     // ----------------------------------------------------------
+
+    //init semaphore to 0
+    if (sem_init(&socket_copied, 0, 0) == -1)
+    {
+        perror("Error initializing semaphore");
+        exit(EXIT_FAILURE);
+    }
+
     while (TRUE)
     {
-        //get a new client connection
-        int *client_socket = malloc(sizeof(int));
-        
-        // check if malloc failed
-        if (client_socket == NULL)
-        {
-            perror("Error allocating client socket");
-            continue;
-        }
+        // Accept a new client connection 
+        int client_socket = accept(server_socket, NULL, NULL);
 
-        //accept a new client connection
-        *client_socket = accept(server_socket, NULL, NULL);
-
-        // check if accept failed
-        if (*client_socket == -1)
+        if (client_socket == -1)
         {
             perror("Error accepting connection");
-            free(client_socket);
             continue;
         }
 
-        // log the accepted client connection
         printf("\nServer with PID %d: accepted client\n", getpid());
 
-        // no more race conditions!
-        // each thread receives its own allocated socket descriptor
-        // to prevent the accept loop from overwriting the value.
         pthread_t thread;
-        
-        if (pthread_create(&thread, NULL, handle_client, client_socket) != 0)
+
+        if (pthread_create(
+                &thread,
+                NULL,
+                handle_client,
+                &client_socket) != 0)
         {
             perror("Error creating thread");
-            close(*client_socket);
-            free(client_socket);
+            close(client_socket);
             continue;
         }
-        
-        // detach the thread so that we don't have to wait (join) with it to reclaim memory.
-        // memory will be reclaimed when the thread finishes.
+
+        /*
+        * Wait until the new thread has copied client_socket
+        * before allowing the accept loop to reuse the variable.
+        */
+        if (sem_wait(&socket_copied) == -1)
+        {
+            perror("Error waiting on semaphore");
+            exit(EXIT_FAILURE);
+        }
+
         if (pthread_detach(thread) != 0)
         {
             perror("Error detaching thread");
@@ -115,8 +120,17 @@ int main(int argc, char** argv)
 void* handle_client(void* arg)
 {
     int client_socket = *((int*)arg);
-    // free the allocated memory for the client socket descriptor
-    free(arg); 
+
+    /*
+     * The socket descriptor has now been copied into this
+     * thread's local variable, so main may reuse its variable.
+     */
+    if (sem_post(&socket_copied) == -1)
+    {
+        perror("Error posting semaphore");
+        close(client_socket);
+        return NULL;
+    }
 
     time_t current_time;
     struct tm utc_time;
@@ -125,7 +139,7 @@ void* handle_client(void* arg)
     // get current time
     current_time = time(NULL);
 
-    // error handling for wrong time
+    // error handling for no time recieved
     if (current_time == (time_t)-1)
     {
         perror("Error getting current time");

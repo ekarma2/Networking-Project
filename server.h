@@ -13,6 +13,7 @@
 #include <signal.h>
 #include <string.h>
 #include <time.h>
+#include <semaphore.h>
 
 /* Function prototypes */
 void* handle_client(void* arg);
