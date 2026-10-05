@@ -119,64 +119,187 @@ int main(int argc, char** argv)
 
 void* handle_client(void* arg)
 {
+    //for the proxy just ask the NIST instead of storing the time here
+    //AKA no time functions
+
     int client_socket = *((int*)arg);
 
     /*
-     * The socket descriptor has now been copied into this
-     * thread's local variable, so main may reuse its variable.
+     * socket descriptor is copied into the thread's local variable
+     * so main may reuse its variable.
      */
     if (sem_post(&socket_copied) == -1)
     {
-        perror("Error posting semaphore");
+        perror("error posting semaphore");
         close(client_socket);
         return NULL;
     }
 
-    time_t current_time;
-    struct tm utc_time;
-    char time_message[80];
+    char time_message[MAX_MESSAGE_LENGTH];
+    int nist_socket;
+    int message_length;
 
-    // get current time
-    current_time = time(NULL);
+    printf("[proxy] client connected\n");
+    printf("[proxy] connecting to %s:%s\n",
+           NIST_SERVER_ADDRESS,
+           NIST_SERVER_PORT);
 
-    // error handling for no time recieved
-    if (current_time == (time_t)-1)
-    {
-        perror("Error getting current time");
-        close(client_socket);
-        return NULL;
-    }
-
-    // convert to UTC in a thread-safe way
-    // gmtime_r instead of gmtime, gmtime is not thread-safe
-    if (gmtime_r(&current_time, &utc_time) == NULL)
-    {
-        perror("Error converting time");
-        close(client_socket);
-        return NULL;
-    }
-
-    // make the time message, ends in *
-    strftime(
-        time_message,
-        sizeof(time_message),
-        "%Y-%m-%d %H:%M:%S UTC *",
-        &utc_time
+    //the proxy now acts as a client to NIST.
+    nist_socket = connect_to_server(
+        NIST_SERVER_ADDRESS,
+        NIST_SERVER_PORT
     );
 
-    // send the time message to the client
-    if (write(client_socket, time_message, strlen(time_message)) == -1)
+    if (nist_socket == -1)
     {
-        perror("Error writing to client");
+        fprintf(stderr, "[proxy] could not connect to NIST\n");
+        close(client_socket);
+        return NULL;
     }
 
-    printf("Sent: %s\n", time_message);
+    printf("[proxy] connected to NIST\n");
+    printf("[proxy] waiting for Daytime response\n");
 
-    // close connection after sending the time
-    if (close(client_socket) == -1)
+    message_length =
+        receive_daytime_message(nist_socket, time_message);
+
+    close(nist_socket);
+
+    if (message_length <= 0)
     {
-        perror("Error closing client socket");
+        fprintf(stderr,
+                "[proxy] no Daytime message received from NIST\n");
+
+        close(client_socket);
+        return NULL;
     }
+
+    printf(
+        "[proxy] received from NIST: %.*s\n",
+        message_length,
+        time_message
+    );
+
+    printf("[proxy] forwarding response to client\n");
+
+    if (write(client_socket,
+              time_message,
+              message_length) == -1)
+    {
+        perror("[proxy] error forwarding message");
+    }
+    else
+    {
+        printf("[proxy] response forwarded successfully\n");
+    }
+
+    close(client_socket);
+
+    printf("[proxy] client connection closed\n");
 
     return NULL;
+}
+
+//fuction to connect to nist
+int connect_to_server(const char *server_address, const char *server_port)
+{
+    struct addrinfo hints;
+    struct addrinfo *server_info;
+    struct addrinfo *current_addr;
+
+    int socket_fd;
+    int lookup_status;
+
+    //init hints to 0
+    memset(&hints, 0, sizeof(hints));
+
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    lookup_status = getaddrinfo(
+        server_address,
+        server_port,
+        &hints,
+        &server_info
+    );
+
+    if (lookup_status != 0)
+    {
+        fprintf(stderr,
+                "getaddrinfo error: %s\n",
+                gai_strerror(lookup_status));
+
+        return -1;
+    }
+
+    socket_fd = -1;
+
+    //loop through all the results and connect to the first we can
+    for (current_addr = server_info;
+         current_addr != NULL;
+         current_addr = current_addr->ai_next)
+    {
+        socket_fd = socket(
+            current_addr->ai_family,
+            current_addr->ai_socktype,
+            current_addr->ai_protocol
+        );
+
+        if (socket_fd == -1)
+        {
+            continue;
+        }
+
+        if (connect(
+                socket_fd,
+                current_addr->ai_addr,
+                current_addr->ai_addrlen) == 0)
+        {
+            break;
+        }
+
+        close(socket_fd);
+        socket_fd = -1;
+    }
+
+    freeaddrinfo(server_info);
+
+    return socket_fd;
+}
+
+//function to get the daytime message from NIST
+int receive_daytime_message(int socket_fd, char *message_buffer)
+{
+    int total_bytes_received = 0;
+    ssize_t bytes_read;
+
+    while (total_bytes_received < MAX_MESSAGE_LENGTH)
+    {
+        bytes_read = read(
+            socket_fd,
+            message_buffer + total_bytes_received,
+            1
+        );
+
+        if (bytes_read < 0)
+        {
+            perror("Error reading from NIST");
+            return -1;
+        }
+
+        if (bytes_read == 0)
+        {
+            break;
+        }
+
+        total_bytes_received++;
+
+        if (message_buffer[total_bytes_received - 1]
+                == ON_TIME_MARKER)
+        {
+            break;
+        }
+    }
+
+    return total_bytes_received;
 }
