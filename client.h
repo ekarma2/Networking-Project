@@ -7,7 +7,7 @@
 
 
 //proxy server info
-#define SERVER_ADDRESS "127.0.0.1"
+#define SERVER_ADDRESS "172.233.157.24"
 #define SERVER_PORT "23657"
 
 // MAX_MESSAGE_LENGTH is 80

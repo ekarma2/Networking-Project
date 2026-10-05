@@ -38,7 +38,7 @@ int receive_daytime_message(
 #define FALSE 0
 #define TRUE !FALSE
 #define NUM_CONNECTIONS 5       // number of pending connections in the connection queue
-#define NIST_SERVER_ADDRESS "time.nist.gov"
+#define NIST_SERVER_ADDRESS "time-a-g.nist.gov"
 #define NIST_SERVER_PORT "13"
 #define MAX_MESSAGE_LENGTH 80
 #define ON_TIME_MARKER '*'
